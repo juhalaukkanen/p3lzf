@@ -63,12 +63,12 @@ def lookup_match(input_data, input_offset, block_size, first_matches, prev_match
     offset = update_enc_lut(hash_lzf(input_data[input_offset:]), input_offset, first_matches, prev_matches)
     while is_offset_within_bounds(offset, input_offset, block_size, block_offset, best_match["lit"]):
         if input_data[offset + best_match["lit"]] == input_data[input_offset + best_match["lit"]]: # is a match candidate?
-            for lit_offset in range(1 + block_ref_max): # find out how long this match is
-                if input_data[offset + lit_offset] != input_data[input_offset + lit_offset]:
+            for lit_len in range(1 + block_ref_max): # find out how long this match is
+                if input_data[offset + lit_len] != input_data[input_offset + lit_len]:
                     break
             # Update best match if it is longer than one found already
-            if lit_offset >= max(3, best_match["lit"]): # required min 3 bytes shorter for encoding overhead (header)
-                best_match["lit"] = lit_offset
+            if lit_len >= max(3, best_match["lit"]): # required min 3 bytes shorter for encoding overhead (header)
+                best_match["lit"] = lit_len
                 best_match["offset"] = offset
         diff = get_previous_match(offset, prev_matches)
         offset = offset - diff if diff != 0 else 0 # if offset is zero, the loop terminates
