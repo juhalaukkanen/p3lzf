@@ -9,7 +9,7 @@ Benefits:
 
 -you can use unlzf to extract files compressed with this lzf_compress.py
 
--offers same or in some cases better compression ratio!
+-offers the best compression ratio!
 
 -more understandable algorithm
 

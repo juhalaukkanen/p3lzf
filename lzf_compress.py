@@ -15,39 +15,26 @@ def hash_lzf(input_data):
     # NOTE: liblzf 3.6 uses own xor tech here
     return hash(input_data[:2])
 
-def update_enc_lut(hash, input_offset, first_matches, prev_matches):
-    offset = 0
-    try:
-        offset = first_matches[hash]
-    except:
-        pass
+def update_enc_lut(hash, input_offset, matches):
+    if hash in matches:
+        matches[hash] = matches[hash] + [input_offset]
+    else:
+        matches[hash] = [input_offset]
 
-    backref_index = input_offset & (LZF_MAX_OFF - 1)
-    prev_matches[backref_index] = input_offset - offset # update index of previous hash match
-    first_matches[hash] = input_offset # first hash match encounter is here
-    return offset
+def get_matches(hash, matches):
+    if hash in matches:
+        return matches[hash]
+    else:
+        return []
 
-def get_previous_match(offset, prev_matches):
-    prev_match_index = 0
-    try:
-        backref_index = offset & (LZF_MAX_OFF - 1)
-        prev_match_index = prev_matches[backref_index]
-    except:
-        pass
-
-    #print("DIFF {}".format(prev_match_index))
-    return prev_match_index
-
-def is_offset_within_bounds(offset, input_offset, block_size, block_offset, best_lit_match):
+def is_offset_within_bounds(offset, input_offset, block_size, block_offset):
     if offset == 0:
         return False
     if offset > input_offset:
         return False
-    if (input_offset + best_lit_match) >= block_size:
-        return False
     return offset >= block_offset
 
-def lookup_match(input_data, input_offset, block_size, first_matches, prev_matches):
+def lookup_match(input_data, input_offset, block_size, matches):
     LZF_MAX_REF = ((1 << 8) + (1 << 3))
     if (block_size - input_offset) < LZF_MAX_REF:
         block_ref_max = block_size - input_offset - 1
@@ -59,21 +46,30 @@ def lookup_match(input_data, input_offset, block_size, first_matches, prev_match
     else:
         block_offset = input_offset - LZF_MAX_OFF
 
-    best_match = {"lit": 0, "offset": 0}
-    offset = update_enc_lut(hash_lzf(input_data[input_offset:]), input_offset, first_matches, prev_matches)
-    while is_offset_within_bounds(offset, input_offset, block_size, block_offset, best_match["lit"]):
-        if input_data[offset + best_match["lit"]] == input_data[input_offset + best_match["lit"]]: # is a match candidate?
-            for lit_len in range(1 + block_ref_max): # find out how long this match is
-                if input_data[offset + lit_len] != input_data[input_offset + lit_len]:
-                    break
-            # Update best match if it is longer than one found already
-            if lit_len >= max(3, best_match["lit"]): # required min 3 bytes shorter for encoding overhead (header)
-                best_match["lit"] = lit_len
-                best_match["offset"] = offset
-        diff = get_previous_match(offset, prev_matches)
-        offset = offset - diff if diff != 0 else 0 # if offset is zero, the loop terminates
+    offset_hash = hash_lzf(input_data[input_offset:])
+    offsets = get_matches(offset_hash, matches)
+    update_enc_lut(offset_hash, input_offset, matches)
 
-    return best_match["lit"], best_match["offset"]
+    best_match_len = 0
+    best_match_offset = 0
+    for offset in offsets:
+        if not is_offset_within_bounds(offset, input_offset, block_size, block_offset):
+            continue # goes out of bounds - TODO: probably good to drop from dict?
+
+        for candid_len in range(block_ref_max): # find out how long this match is
+            if input_data[offset + candid_len] != input_data[input_offset + candid_len]:
+                break
+
+        if (input_offset + candid_len) >= block_size:
+            continue # unfortunately too long
+
+        # Update best match if it is longer than one found already
+        if candid_len >= max(3, best_match_len): # required min 3 bytes shorter for encoding overhead (header)
+            best_match_len = candid_len
+            best_match_offset = offset
+
+    #print("Size {} offset {}".format(best_match_len, best_match_offset))
+    return best_match_len, best_match_offset
 
 def start_lit_run(output_data, lit):
     output_data.append(lit)
@@ -123,8 +119,7 @@ def handle_tail(output_data, lit, input_data, input_offset, block_size):
 #
 #
 def lzf_compress(input_data, block_size):
-    first_matches = dict()
-    prev_matches = dict()
+    matches = dict()
 
     if block_size <= 0:
         return input_data, block_size, 0
@@ -135,10 +130,10 @@ def lzf_compress(input_data, block_size):
     output_data = bytearray([0, input_data[0]])
 
     while input_offset < (block_size - 2):
-        best_lit_match, offset = lookup_match(input_data, input_offset, block_size, first_matches, prev_matches)
+        lit_len, offset = lookup_match(input_data, input_offset, block_size, matches)
 
-        if best_lit_match != 0:
-            length = best_lit_match
+        if lit_len != 0:
+            length = lit_len
             offset = input_offset - offset - 1 # change offset relative to input data
 
             output_data = end_run_with_undo_run_check(output_data, lit)
@@ -167,8 +162,7 @@ def lzf_compress(input_data, block_size):
                 # Update match for the whole length to the tables.
                 update_enc_lut(hash_lzf(input_data[input_offset:]),
                                         input_offset,
-                                        first_matches,
-                                        prev_matches)
+                                        matches)
                 input_offset += 1
                 length -= 1
         else:
